@@ -1,0 +1,595 @@
+(() => {
+  console.log('[PP Lookup ModalGrid — MDA-like] bootstrap');
+
+  // ----------------- Utilities -----------------
+  const byId = id => document.getElementById(id);
+
+  const escXml = s => (s ?? '').toString()
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&apos;');
+
+  const unescapeXml = s => (s ?? '').toString()
+    .replace(/&lt;/g,'<').replace(/&gt;/g,'>')
+    .replace(/&quot;/g,'"').replace(/&apos;/g,"'")
+    .replace(/&amp;/g,'&');
+
+  const hasAt = s => /@/.test(s || '');
+  const isIdLike = s => /^[A-Za-z0-9\-_]+$/.test((s || '').trim());
+
+  async function getJson(url, { signal } = {}) {
+    const resp = await fetch(url, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json; charset=utf-8',
+        'OData-MaxVersion': '4.0',
+        'OData-Version': '4.0',
+        // Required for MDA-like display strings (Status, Currency, Lookups, etc.)
+        Prefer: 'odata.include-annotations="*"'
+      },
+      credentials: 'include',
+      signal
+    });
+    if (!resp.ok) {
+      const txt = await resp.text().catch(()=>'');
+      throw new Error(`GET ${url} -> ${resp.status} ${txt}`);
+    }
+    return resp.json();
+  }
+
+  // ----------------- Stock → Inline (MDA-like) -----------------
+  function hideStock(nameEl) {
+    const wrap =
+      nameEl?.closest('.input-group') ||
+      nameEl?.closest('.control')     ||
+      nameEl?.closest('.form-group')  ||
+      nameEl?.closest('td')           ||
+      nameEl?.parentElement;
+
+    if (wrap) wrap.style.display = 'none';
+    return wrap || nameEl;
+  }
+
+  // Inline control: [readonly textbox][magnifying glass]
+  function createInlineLookupUI(nameEl, onOpenModal, onClear, getLabel) {
+    const anchor = hideStock(nameEl);
+
+    const wrap = document.createElement('div');
+    wrap.className = 'pp-lookup-inline input-group';
+    wrap.innerHTML = `
+      <input type="text" class="form-control" aria-label="Selected value" readonly />
+      <button class="btn btn-outline-secondary" type="button" data-pp-open title="Search">
+        <span class="fa fa-search" aria-hidden="true"></span>
+        <span class="visually-hidden">Search</span>
+      </button>
+    `;
+    anchor.insertAdjacentElement('afterend', wrap);
+
+    const display = wrap.querySelector('input.form-control');
+    display.value = getLabel() || '';
+
+    wrap.querySelector('[data-pp-open]').addEventListener('click', (e) => {
+      e.preventDefault();
+      onOpenModal(); // ← modal opens ONLY when user clicks
+    });
+
+    // Optional Clear button (uncomment to mimic default clear)
+    // const clearBtn = document.createElement('button');
+    // clearBtn.className = 'btn btn-outline-secondary';
+    // clearBtn.type = 'button';
+    // clearBtn.title = 'Clear';
+    // clearBtn.innerHTML = '<span aria-hidden="true">&times;</span><span class="visually-hidden">Clear</span>';
+    // clearBtn.addEventListener('click', e => { e.preventDefault(); onClear(); display.value = ''; });
+    // wrap.appendChild(clearBtn);
+
+    return { root: wrap, display };
+  }
+
+  // ----------------- Modal (no auto-open) -----------------
+  function buildModal(entity) {
+    const overlay = document.createElement('div');
+    overlay.className = 'pp-modal-overlay';
+    overlay.style.cssText = 'position:fixed; inset:0; background:rgba(0,0,0,.35); z-index:1050; display:none;';
+
+    const modal = document.createElement('div');
+    modal.className = 'pp-modal';
+    modal.style.cssText = `
+      position:fixed; top:8%; left:50%; transform:translateX(-50%);
+      background:#fff; width:min(980px,96vw); max-height:84vh; overflow:hidden;
+      border-radius:6px; box-shadow:0 10px 30px rgba(0,0,0,.25); z-index:1051; display:none;
+      display:flex; flex-direction:column;`;
+
+    modal.innerHTML = `
+      <div style="padding:12px 16px; border-bottom:1px solid #eee; display:flex; gap:8px; align-items:center;">
+        <h5 style="margin:0; flex:1;">Lookup ${entity}</h5>
+        <button type="button" class="btn btn-sm btn-light" data-pp-close>Close</button>
+      </div>
+      <div style="padding:12px 16px; overflow:auto; flex:1;">
+        <div class="row g-2" style="margin-bottom:8px;">
+          <div class="col" style="min-width:260px;">
+            <label class="form-label" for="pp-q">Search</label>
+            <input id="pp-q" type="text" class="form-control form-control-sm"
+              placeholder="Type search text… then press Enter">
+          </div>
+          <div class="col-auto" style="padding-top:24px;">
+            <button class="btn btn-primary btn-sm" data-pp-do-search>Search</button>
+          </div>
+        </div>
+
+        <div class="table-responsive" style="border:1px solid #eee;">
+          <table class="table table-sm table-hover mb-0">
+            <thead class="table-light" id="pp-head"><tr><th>Results</th></tr></thead>
+            <tbody id="pp-results">
+              <tr><td class="text-muted">Enter text, then press <strong>Enter</strong> or click <strong>Search</strong>.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="d-flex align-items-center justify-content-between" style="padding-top:8px;">
+          <div id="pp-status" class="text-muted small">Ready</div>
+          <div class="btn-group">
+            <button class="btn btn-outline-secondary btn-sm" data-pp-prev disabled>Prev</button>
+            <button class="btn btn-outline-secondary btn-sm" data-pp-next disabled>Next</button>
+          </div>
+        </div>
+      </div>
+      <div style="padding:10px 16px; border-top:1px solid #eee; display:flex; justify-content:flex-end; gap:8px;">
+        <button class="btn btn-secondary btn-sm" data-pp-close>Cancel</button>
+      </div>
+    `;
+
+    document.body.appendChild(overlay);
+    document.body.appendChild(modal);
+
+    const els = {
+      overlay,
+      modal,
+      closeBtns: modal.querySelectorAll('[data-pp-close]'),
+      q: modal.querySelector('#pp-q'),
+      searchBtn: modal.querySelector('[data-pp-do-search]'),
+      head: modal.querySelector('#pp-head'),
+      resultsTbody: modal.querySelector('#pp-results'),
+      status: modal.querySelector('#pp-status'),
+      prev: modal.querySelector('[data-pp-prev]'),
+      next: modal.querySelector('[data-pp-next]')
+    };
+
+    function open() { overlay.style.display = 'block'; modal.style.display = 'flex'; setTimeout(() => els.q.focus(), 50); }
+    function close() { modal.style.display = 'none'; overlay.style.display = 'none'; }
+
+    els.overlay.addEventListener('click', close);
+    els.closeBtns.forEach(b => b.addEventListener('click', close));
+
+    return { ...els, open, close };
+  }
+
+  // ----------------- View parsing (display names + order) -----------------
+  // Parse <grid><row><cell name="logical" label="Display Name" .../></row></grid>
+  function parseLayout(layoutxml) {
+    const out = { order: [], labels: {} };
+    if (!layoutxml) return out;
+
+    const raw = unescapeXml(layoutxml);
+    let xml;
+    try {
+      xml = new DOMParser().parseFromString(raw, 'text/xml');
+    } catch { return out; }
+
+    const cells = Array.from(xml.getElementsByTagName('cell'));
+    const names = [];
+    cells.forEach(cell => {
+      const logical = cell.getAttribute('name');
+      if (logical) {
+        names.push(logical);
+        const label = cell.getAttribute('label');
+        if (label) out.labels[logical] = label;
+      }
+    });
+    out.order = [...new Set(names)];
+    return out;
+  }
+
+  // Optional override via Liquid: data-column-labels="fullname:Full Name;emailaddress1:Email"
+  function labelsFromOverrides(root) {
+    const s = root.dataset.columnLabels || '';
+    const map = {};
+    s.split(';').map(x => x.trim()).filter(Boolean).forEach(pair => {
+      const i = pair.indexOf(':');
+      if (i > 0) {
+        const k = pair.slice(0, i).trim();
+        const v = pair.slice(i + 1).trim();
+        if (k && v) map[k] = v;
+      }
+    });
+    return map;
+  }
+  function overrideOrder(root) {
+    const s = root.dataset.columnLabels || '';
+    return s.split(';')
+      .map(x => x.trim()).filter(Boolean)
+      .map(pair => {
+        const i = pair.indexOf(':');
+        return i > 0 ? pair.slice(0, i).trim() : '';
+      })
+      .filter(Boolean);
+  }
+
+  // Fallback prettifier (used only if layout/override label missing)
+  function prettyHeader(logical) {
+    return (logical || '')
+      .replace(/\./g,' ').replace(/_/g,' ').replace(/\s+/g,' ')
+      .replace(/(^|\s)[a-z]/g, s => s.toUpperCase());
+  }
+
+  // ----------------- Column order fallback -----------------
+  function computeColumnOrder(layoutxml, rows, idAttr) {
+    const { order: fromLayout } = parseLayout(layoutxml);
+    const first = rows && rows[0] ? Object.keys(rows[0]) : [];
+    const isVisible = k => !k.startsWith('@') && k !== idAttr && k !== 'odata.etag';
+
+    const candidate = first.filter(isVisible);
+
+    const ordered = [];
+    // keep layout order first
+    fromLayout.forEach(col => {
+      if (candidate.includes(col)) ordered.push(col);
+      else {
+        const dot = col.indexOf('.');
+        if (dot > 0) {
+          const aliasForm = col;
+          const colOnly = col.slice(dot + 1);
+          if (candidate.includes(aliasForm)) ordered.push(aliasForm);
+          else if (candidate.includes(colOnly)) ordered.push(colOnly);
+        }
+      }
+    });
+
+    candidate.forEach(k => { if (!ordered.includes(k)) ordered.push(k); });
+    return [...new Set(ordered)];
+  }
+
+  // ----------------- FetchXML composition -----------------
+  function ensureIdAttr(entityXml, idAttr) {
+    const re = new RegExp(`attribute\\s+name=["']${idAttr}["']`,'i');
+    if (re.test(entityXml)) return entityXml;
+    return entityXml.replace(/<entity\b[^>]*>/i, m => `${m}<attribute name="${idAttr}"/>`);
+  }
+
+  function injectSearchFilters(entityXml, term, prefixCols = [], exactCols = [], enforceActive = true) {
+    const raw = (term || '').trim();
+    const safe = escXml(raw);
+    const or = [];
+
+    // prefix (index-friendly)
+    prefixCols.forEach(c => {
+      const col = (c || '').trim(); if (!col) return;
+      const val = col.toLowerCase().includes('email') ? safe.toLowerCase() : safe;
+      or.push(`<condition attribute="${col}" operator="like" value="${val}%"/>`);
+    });
+
+    // exact branches
+    exactCols.forEach(c => {
+      const col = (c || '').trim(); if (!col) return;
+      const val = col.toLowerCase().includes('email') ? safe.toLowerCase() : safe;
+      if (col.toLowerCase().includes('email')) {
+        if (hasAt(raw)) or.push(`<condition attribute="${col}" operator="eq" value="${val}"/>`);
+      } else if (isIdLike(raw)) {
+        or.push(`<condition attribute="${col}" operator="eq" value="${val}"/>`);
+      }
+    });
+
+    const searchBlock = or.length ? `<filter type="or">${or.join('')}</filter>` : '';
+    const active = enforceActive ? `<filter><condition attribute="statecode" operator="eq" value="0"/></filter>` : '';
+
+    return entityXml.replace(/<\/entity>\s*$/i, `${searchBlock}${active}</entity>`);
+  }
+
+  function composeFetchXmlFromView({
+    viewFetchXml, entity, idAttr, term,
+    pageSize, pageNumber, pagingCookie,
+    prefixCols, exactCols, enforceActive
+  }) {
+    const raw = unescapeXml(viewFetchXml || '');
+    const m = raw.match(/<entity[^>]*\sname=["']([^"']+)["'][\s\S]*?<\/entity>/i);
+    if (!m) return null;
+    const entityInView = m[1].toLowerCase();
+    if (entityInView !== entity.toLowerCase()) return null;
+
+    let entityXml = m[0];
+    entityXml = ensureIdAttr(entityXml, idAttr);
+
+    if (term && term.trim().length) {
+      entityXml = injectSearchFilters(entityXml, term, prefixCols, exactCols, enforceActive);
+    } else if (enforceActive) {
+      // keep results friendly even with empty search
+      entityXml = entityXml.replace(/<\/entity>\s*$/i, `<filter><condition attribute="statecode" operator="eq" value="0"/></filter></entity>`);
+    }
+
+    const cookieAttr = pagingCookie ? ` paging-cookie="${escXml(pagingCookie)}"` : '';
+    return `<fetch version="1.0" mapping="logical" count="${pageSize}" page="${pageNumber}"${cookieAttr}>${entityXml}</fetch>`;
+  }
+
+  async function runFetchXml(entitySet, fetchXml, { signal } = {}) {
+    const url = `/_api/${entitySet}?fetchXml=${encodeURIComponent(fetchXml)}`;
+    return getJson(url, { signal });
+  }
+
+  // ----------------- View resolution -----------------
+  async function getViewFetchXmlAndLayout({ viewKind, viewGuid }) {
+    const set = (viewKind || '').toLowerCase() === 'userquery' ? 'userqueries' : 'savedqueries';
+    const url = `/_api/${set}(${viewGuid})?$select=fetchxml,layoutxml`;
+    const v = await getJson(url);
+    return { fetchxml: v.fetchxml || '', layoutxml: v.layoutxml || '' };
+  }
+
+  function getEmbeddedFetchXml(root) {
+    const t = root.querySelector('template[data-pp-fetchxml]');
+    if (!t) return null;
+    const raw = (t.textContent || '').trim();
+    return raw ? { fetchxml: raw, layoutxml: '' } : null;
+  }
+
+  // ----------------- MDA-like value formatting -----------------
+  // Prefer formatted values; fall back to raw.
+  function getDisplayValue(rec, key) {
+    // Exact annotation for this key
+    const fmt = rec[`${key}@OData.Community.Display.V1.FormattedValue`];
+    if (typeof fmt !== 'undefined') return fmt;
+
+    // Link-entity alias cases: 'alias.column' may also carry a formatted annotation with the same key
+    // (already covered by the line above). If not found, try a best-effort lowercase match:
+    const lowerKey = key.toLowerCase();
+    for (const k in rec) {
+      if (k.toLowerCase() === `${lowerKey}@odata.community.display.v1.formattedvalue`) {
+        return rec[k];
+      }
+    }
+
+    return rec[key];
+  }
+
+  // ----------------- Render table (display names + formatted values) -----------------
+  function renderTable(tbody, thead, rows, columns, onPick, labelsMap) {
+    // header
+    thead.innerHTML = '';
+    const trh = document.createElement('tr');
+    columns.forEach(c => {
+      const th = document.createElement('th');
+      th.textContent = (labelsMap && labelsMap[c]) || prettyHeader(c);
+      trh.appendChild(th);
+    });
+    thead.appendChild(trh);
+
+    // body
+    tbody.innerHTML = '';
+    if (!rows || !rows.length) {
+      const tr = document.createElement('tr');
+      const td = document.createElement('td');
+      td.colSpan = columns.length || 1;
+      td.className = 'text-muted';
+      td.textContent = 'No results.';
+      tr.appendChild(td);
+      tbody.appendChild(tr);
+      return;
+    }
+
+    rows.forEach(r => {
+      const tr = document.createElement('tr');
+      tr.style.cursor = 'pointer';
+      columns.forEach(c => {
+        const td = document.createElement('td');
+        const v = getDisplayValue(r, c);
+        td.textContent = (v === null || typeof v === 'undefined') ? '' : ('' + v);
+        tr.appendChild(td);
+      });
+      tr.addEventListener('click', () => onPick(r));
+      tbody.appendChild(tr);
+    });
+  }
+
+  // ----------------- Instance initializer -----------------
+  async function initInstance(root) {
+    if (!root || root.dataset.initialized === '1') return;
+    root.dataset.initialized = '1';
+
+    // Parameters from Liquid placeholder
+    const fieldId         = root.dataset.fieldId || '';
+    const fieldNameId     = root.dataset.fieldNameId || '';
+    const fieldEntityName = root.dataset.fieldEntitynameId || '';
+    const entity          = root.dataset.entity || '';
+    const entitySet       = root.dataset.entityset || '';
+    const idAttr          = root.dataset.idAttribute || (entity ? `${entity}id` : '');
+
+    const labelPriority   = (root.dataset.labelPriority || '').split(',').map(s => s.trim()).filter(Boolean);
+    const prefixCols      = (root.dataset.searchPrefix || '').split(',').map(s => s.trim()).filter(Boolean);
+    const exactCols       = (root.dataset.searchExact || '').split(',').map(s => s.trim()).filter(Boolean);
+    const enforceActive   = (root.dataset.enforceActive || 'true').toLowerCase() === 'true';
+    const minChars        = parseInt(root.dataset.minChars || '2', 10);
+    const pageSize        = parseInt(root.dataset.pageSize || '25', 10);
+
+    // Fixed view: by GUID (savedquery/userquery) or embedded fetchxml
+    const viewKind        = (root.dataset.viewKind || '').toLowerCase(); // 'savedquery' | 'userquery'
+    const viewGuid        = (root.dataset.viewGuid || '').replace(/[{}]/g,'');
+    const embedded        = getEmbeddedFetchXml(root);
+
+    const idEl = byId(fieldId);
+    const nameEl = byId(fieldNameId);
+    const entityNameEl = byId(fieldEntityName);
+    if (!idEl || !nameEl) { console.warn('[PP Lookup ModalGrid] inputs not present for', root); return; }
+
+    // Modal (only opens when user clicks magnifier)
+    const modal = buildModal(entity);
+
+    // Inline replacement UI (textbox + magnifier, like stock)
+    const currentLabel = () => nameEl.value || '';
+    const inlineUI = createInlineLookupUI(
+      nameEl,
+      () => modal.open(),
+      () => {
+        idEl.value = '';
+        if (nameEl) nameEl.value = '';
+        if (entityNameEl) entityNameEl.value = entity;
+        idEl.dispatchEvent(new Event('change', { bubbles: true }));
+        if (nameEl) nameEl.dispatchEvent(new Event('change', { bubbles: true }));
+        inlineUI.display.value = '';
+      },
+      currentLabel
+    );
+
+    // Prefill inline textbox if GUID is present but label is empty
+    (async () => {
+      try {
+        if (idEl.value && !nameEl.value) {
+          const selectCols = [...new Set([...labelPriority, idAttr])].filter(Boolean).join(',');
+          const r = await getJson(`/_api/${entitySet}(${idEl.value})?$select=${selectCols}`);
+          const label = labelPriority.map(c => r[c]).find(Boolean) || r[idAttr] || idEl.value;
+          if (nameEl) nameEl.value = label;
+          inlineUI.display.value = label;
+        } else {
+          inlineUI.display.value = currentLabel();
+        }
+      } catch (e) {
+        console.warn('[PP Lookup ModalGrid] prefetch label failed', e);
+      }
+    })();
+
+    // Resolve fixed view
+    let fixedView = embedded;
+    if (!fixedView && viewGuid && viewKind) {
+      try {
+        modal.status.textContent = 'Loading view…';
+        fixedView = await getViewFetchXmlAndLayout({ viewKind, viewGuid });
+      } catch (e) {
+        console.error('[PP Lookup ModalGrid] view fetch failed', e);
+      } finally {
+        modal.status.textContent = 'Ready';
+      }
+    }
+    if (!fixedView) {
+      console.warn('[PP Lookup ModalGrid] No fixed view provided; using minimal layout.');
+      fixedView = { fetchxml: `<fetch version="1.0" mapping="logical"><entity name="${entity}"><attribute name="${idAttr}"/></entity></fetch>`, layoutxml: '' };
+    }
+
+    const { order: layoutOrder, labels: layoutLabels } = parseLayout(fixedView.layoutxml);
+    const overrideLabels = labelsFromOverrides(root);
+    const headerLabels = { ...layoutLabels, ...overrideLabels }; // override wins
+
+    // Paging
+    let pageNumber = 1;
+    let pagingCookie = null;
+    const prevStack = [];
+    let inflight = null;
+
+    function enablePaging(hasNext) {
+      modal.prev.disabled = prevStack.length === 0 || pageNumber === 1;
+      modal.next.disabled = !hasNext;
+    }
+
+    function onPick(rec) {
+      idEl.value = rec[idAttr];
+      const label = labelPriority.map(c => getDisplayValue(rec, c) || rec[c]).find(Boolean) || rec[idAttr] || '';
+      if (nameEl) nameEl.value = label;
+      if (entityNameEl) entityNameEl.value = entity;
+      idEl.dispatchEvent(new Event('change', { bubbles: true }));
+      if (nameEl) nameEl.dispatchEvent(new Event('change', { bubbles: true }));
+      inlineUI.display.value = label || '';
+      modal.modal.style.display = 'none';
+      modal.overlay.style.display = 'none';
+    }
+
+    async function doSearch({ reset = true } = {}) {
+      const term = modal.q.value.trim();
+      if (!term || term.length < minChars) {
+        modal.head.innerHTML = '<tr><th>Results</th></tr>';
+        modal.resultsTbody.innerHTML =
+          `<tr><td class="text-muted">Type at least ${minChars} character(s), then press Enter or click Search.</td></tr>`;
+        enablePaging(false);
+        modal.status.textContent = `Enter at least ${minChars} character(s)`;
+        return;
+      }
+
+      if (reset) { pageNumber = 1; pagingCookie = null; prevStack.length = 0; }
+
+      const fx = composeFetchXmlFromView({
+        viewFetchXml: fixedView.fetchxml,
+        entity, idAttr, term,
+        pageSize, pageNumber, pagingCookie,
+        prefixCols, exactCols, enforceActive
+      });
+      if (!fx) {
+        modal.resultsTbody.innerHTML = `<tr><td class="text-danger">Invalid view for entity '${entity}'.</td></tr>`;
+        enablePaging(false);
+        return;
+      }
+
+      modal.status.textContent = 'Searching…';
+      if (inflight) inflight.abort();
+      inflight = new AbortController();
+
+      try {
+        const data = await runFetchXml(entitySet, fx, { signal: inflight.signal });
+        const rows = data.value || [];
+        const cookie = data['@Microsoft.Dynamics.CRM.fetchxmlpagingcookie'] || null;
+
+        // Columns to show: view layout order (strict). If empty, infer from data.
+        const columns = layoutOrder.length
+          ? layoutOrder.filter(n => rows[0] && Object.prototype.hasOwnProperty.call(rows[0], n))
+          : computeColumnOrder(fixedView.layoutxml, rows, idAttr);
+
+        // Render with display names and formatted values (MDA-like)
+        renderTable(modal.resultsTbody, modal.head, rows, columns, onPick, headerLabels);
+
+        const hasNext = rows.length === pageSize && !!cookie;
+        pagingCookie = cookie;
+        enablePaging(hasNext);
+        modal.status.textContent = `${rows.length} result(s)`;
+      } catch (e) {
+        if (e.name !== 'AbortError') {
+          console.error('[PP Lookup ModalGrid] search error', e);
+          modal.resultsTbody.innerHTML = `<tr><td class="text-danger">Search failed. See console.</td></tr>`;
+          modal.status.textContent = 'Search failed';
+          enablePaging(false);
+        }
+      }
+    }
+
+    // Search & paging events
+    modal.q.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); doSearch({ reset:true }); }
+    });
+    modal.searchBtn.addEventListener('click', () => doSearch({ reset:true }));
+    modal.next.addEventListener('click', () => {
+      if (!pagingCookie) return;
+      prevStack.push(pagingCookie);
+      pageNumber += 1;
+      doSearch({ reset:false });
+    });
+    modal.prev.addEventListener('click', () => {
+      if (pageNumber <= 1 || prevStack.length === 0) return;
+      pageNumber -= 1;
+      pagingCookie = prevStack.pop();
+      doSearch({ reset:false });
+    });
+
+    console.log('[PP Lookup ModalGrid] ready for', entity, fieldId);
+  }
+
+  // ----------------- Bootstrap all placeholders -----------------
+  function bootstrapAll(timeoutMs = 20000) {
+    const initAll = () => document.querySelectorAll('.pp-lookup-hijack').forEach(initInstance);
+    initAll(); // first pass
+
+    const start = performance.now();
+    const obs = new MutationObserver(() => {
+      initAll(); // late-rendered forms
+      if (performance.now() - start > timeoutMs) {
+        obs.disconnect();
+        console.warn('[PP Lookup ModalGrid] timeout waiting for placeholders');
+      }
+    });
+    obs.observe(document.documentElement, { childList:true, subtree:true });
+  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bootstrapAll);
+  else bootstrapAll();
+})();

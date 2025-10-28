@@ -1,0 +1,35 @@
+{%- assign field_id              = include.field_id              | default: '' -%}
+{%- assign field_name_id         = include.field_name_id         | default: '' -%}
+{%- assign field_entityname_id   = include.field_entityname_id   | default: '' -%}
+{%- assign entity_logical_name   = include.entity_logical_name   | default: '' -%}
+{%- assign entity_set_name       = include.entity_set_name       | default: '' -%}
+{%- assign id_attribute          = include.id_attribute          | default: '' -%}
+{%- assign label_priority        = include.label_priority        | default: 'name' -%}
+{%- assign search_prefix         = include.search_prefix         | default: '' -%}
+{%- assign search_exact          = include.search_exact          | default: '' -%}
+{%- assign enforce_active        = include.enforce_active        | default: 'true' -%}
+{%- assign min_chars             = include.min_chars             | default: '2' -%}
+{%- assign page_size             = include.page_size             | default: '25' -%}
+{%- assign view_kind             = include.view_kind             | default: '' -%}
+{%- assign view_guid             = include.view_guid             | default: '' -%}
+{%- assign column_labels         = include.column_labels         | default: '' -%}
+{%- assign metadata_flow_url     = include.metadata_flow_url     | default: '' -%}
+{%- assign metadata_flow_timeout = include.metadata_flow_timeout | default: '8000' -%}
+
+<div class="pp-lookup-hijack"
+     data-field-id="{{ field_id | escape }}"
+     data-field-name-id="{{ field_name_id | escape }}"
+     data-field-entityname-id="{{ field_entityname_id | escape }}"
+     data-entity="{{ entity_logical_name | escape }}"
+     data-entityset="{{ entity_set_name | escape }}"
+     data-id-attribute="{{ id_attribute | escape }}"
+     data-label-priority="{{ label_priority | escape }}"
+     data-search-prefix="{{ search_prefix | escape }}"
+     data-search-exact="{{ search_exact | escape }}"
+     data-enforce-active="{{ enforce_active | escape }}"
+     data-min-chars="{{ min_chars | escape }}"
+     data-page-size="{{ page_size | escape }}"
+     data-view-kind="{{ view_kind | escape }}"
+     data-view-guid="{{ view_guid | escape }}"
+     data-column-labels="{{ column_labels | escape }}"
+</div>
