@@ -13,13 +13,10 @@
 {%- assign view_kind             = include.view_kind             | default: '' -%}
 {%- assign view_guid             = include.view_guid             | default: '' -%}
 {%- assign column_labels         = include.column_labels         | default: '' -%}
-{%- assign metadata_flow_url     = include.metadata_flow_url     | default: '' -%}
-{%- assign metadata_flow_timeout = include.metadata_flow_timeout | default: '8000' -%}
 
 <div class="pp-lookup-hijack"
      data-field-id="{{ field_id | escape }}"
      data-field-name-id="{{ field_name_id | escape }}"
-     data-field-entityname-id="{{ field_entityname_id | escape }}"
      data-entity="{{ entity_logical_name | escape }}"
      data-entityset="{{ entity_set_name | escape }}"
      data-id-attribute="{{ id_attribute | escape }}"

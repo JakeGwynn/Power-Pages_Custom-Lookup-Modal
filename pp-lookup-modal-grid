@@ -395,7 +395,6 @@
     // Parameters from Liquid placeholder
     const fieldId         = root.dataset.fieldId || '';
     const fieldNameId     = root.dataset.fieldNameId || '';
-    const fieldEntityName = root.dataset.fieldEntitynameId || '';
     const entity          = root.dataset.entity || '';
     const entitySet       = root.dataset.entityset || '';
     const idAttr          = root.dataset.idAttribute || (entity ? `${entity}id` : '');
@@ -414,7 +413,6 @@
 
     const idEl = byId(fieldId);
     const nameEl = byId(fieldNameId);
-    const entityNameEl = byId(fieldEntityName);
     if (!idEl || !nameEl) { console.warn('[PP Lookup ModalGrid] inputs not present for', root); return; }
 
     // Modal (only opens when user clicks magnifier)
@@ -428,7 +426,6 @@
       () => {
         idEl.value = '';
         if (nameEl) nameEl.value = '';
-        if (entityNameEl) entityNameEl.value = entity;
         idEl.dispatchEvent(new Event('change', { bubbles: true }));
         if (nameEl) nameEl.dispatchEvent(new Event('change', { bubbles: true }));
         inlineUI.display.value = '';
@@ -489,7 +486,6 @@
       idEl.value = rec[idAttr];
       const label = labelPriority.map(c => getDisplayValue(rec, c) || rec[c]).find(Boolean) || rec[idAttr] || '';
       if (nameEl) nameEl.value = label;
-      if (entityNameEl) entityNameEl.value = entity;
       idEl.dispatchEvent(new Event('change', { bubbles: true }));
       if (nameEl) nameEl.dispatchEvent(new Event('change', { bubbles: true }));
       inlineUI.display.value = label || '';
